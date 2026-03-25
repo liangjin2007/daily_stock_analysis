@@ -18,14 +18,13 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
-from tenacity import retry, stop_after_attempt, wait_exponential
 
-from data_provider.akshare_fetcher import AkshareFetcher
+from data_provider.tushare_fetcher import TushareFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ class StockSelector:
     """股票选择器"""
 
     def __init__(self):
-        self.fetcher = AkshareFetcher()
+        self.fetcher = TushareFetcher()
         self.results: List[SelectedStock] = []
 
     def select_stocks(self) -> List[SelectedStock]:
@@ -63,7 +62,7 @@ class StockSelector:
         
         try:
             df = self._get_all_a_stocks()
-            if df.empty:
+            if df is None or df.empty:
                 logger.warning("未获取到A股列表")
                 return []
             
@@ -81,16 +80,87 @@ class StockSelector:
 
     def _get_all_a_stocks(self) -> pd.DataFrame:
         """获取全部A股实时行情"""
-        import akshare as ak
-        
         logger.info("[API调用] 获取A股实时行情...")
         
-        @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=3, max=10))
-        def _fetch():
-            return ak.stock_zh_a_spot_em()
-        
-        df = _fetch()
-        return df
+        try:
+            # 使用 Tushare 的 stock_basic 获取股票列表
+            stock_list = self.fetcher.get_stock_list()
+            if stock_list is None or stock_list.empty:
+                logger.warning("Tushare 获取股票列表失败")
+                return pd.DataFrame()
+            
+            # 获取实时行情（需要逐个获取或使用其他接口）
+            # 这里我们用 Tushare 的 daily 接口获取最近交易日数据
+            # 然后获取前几天的数据来计算各项指标
+            
+            # 获取最近 5 个交易日的数据
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+            
+            # 收集所有股票的实时数据
+            all_quotes = []
+            
+            # 限制处理数量，避免API调用过多
+            max_stocks = 200  # 处理前200只进行筛选演示
+            codes = stock_list['code'].tolist()[:max_stocks]
+            
+            logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
+            
+            for i, code in enumerate(codes):
+                try:
+                    # 获取最近几天的日线数据
+                    daily_data = self.fetcher.get_daily_data(
+                        code, 
+                        start_date=start_date, 
+                        end_date=end_date
+                    )
+                    
+                    if daily_data is None or daily_data.empty:
+                        continue
+                    
+                    # 取最新一天的数据
+                    latest = daily_data.iloc[0]
+                    prev_day = daily_data.iloc[1] if len(daily_data) > 1 else None
+                    
+                    # 计算涨跌幅
+                    change_pct = float(latest.get('pct_chg', 0) or 0)
+                    
+                    # 计算量比（今日成交量/昨日成交量）
+                    volume_ratio = 1.0
+                    if prev_day is not None and prev_day.get('vol', 0):
+                        volume_ratio = latest.get('vol', 0) / prev_day.get('vol', 1)
+                    
+                    # 换手率（需要用成交量/流通股本）
+                    # 这里用 amount/总市值 近似
+                    turnover_rate = 0.0
+                    if latest.get('amount') and latest.get('total_mv'):
+                        turnover_rate = (latest.get('amount', 0) / latest.get('total_mv', 1)) * 100
+                    
+                    # 市值（单位：亿）
+                    market_cap = float(latest.get('total_mv', 0) or 0) / 10000  # 转为亿
+                    
+                    all_quotes.append({
+                        'code': code,
+                        'name': latest.get('name', code),
+                        'change_pct': change_pct,
+                        'volume_ratio': volume_ratio,
+                        'turnover_rate': turnover_rate,
+                        'market_cap': market_cap,
+                    })
+                    
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"已处理 {i + 1}/{len(codes)} 只股票")
+                        
+                except Exception as e:
+                    logger.debug(f"获取 {code} 数据失败: {e}")
+                    continue
+            
+            logger.info(f"成功获取 {len(all_quotes)} 只股票数据")
+            return pd.DataFrame(all_quotes)
+            
+        except Exception as e:
+            logger.exception(f"获取A股数据失败: {e}")
+            return pd.DataFrame()
 
     def _apply_rules(self, df: pd.DataFrame) -> List[SelectedStock]:
         """
@@ -107,50 +177,42 @@ class StockSelector:
         """
         selected: List[SelectedStock] = []
         
-        # 获取列名映射（akshare 返回的列名可能变化）
-        col_map = self._get_column_map(df)
-        
         # 规则1-4: 实时数据筛选
         df_filtered = df.copy()
         
         # 涨幅: 3% < 涨幅 < 5%
-        change_col = col_map.get("涨跌幅")
-        if change_col and change_col in df_filtered.columns:
+        if 'change_pct' in df_filtered.columns:
             df_filtered = df_filtered[
-                (df_filtered[change_col] > 3) & 
-                (df_filtered[change_col] < 5)
+                (df_filtered['change_pct'] > 3) & 
+                (df_filtered['change_pct'] < 5)
             ]
             logger.info(f"规则1(涨幅3-5%): 剩余 {len(df_filtered)} 只")
         
         # 量比 > 1
-        volume_ratio_col = col_map.get("量比")
-        if volume_ratio_col and volume_ratio_col in df_filtered.columns:
-            df_filtered = df_filtered[df_filtered[volume_ratio_col] > 1]
+        if 'volume_ratio' in df_filtered.columns:
+            df_filtered = df_filtered[df_filtered['volume_ratio'] > 1]
             logger.info(f"规则2(量比>1): 剩余 {len(df_filtered)} 只")
         
         # 换手率: 5% < 换手率 < 10%
-        turnover_col = col_map.get("换手率")
-        if turnover_col and turnover_col in df_filtered.columns:
+        if 'turnover_rate' in df_filtered.columns:
             df_filtered = df_filtered[
-                (df_filtered[turnover_col] > 5) & 
-                (df_filtered[turnover_col] < 10)
+                (df_filtered['turnover_rate'] > 5) & 
+                (df_filtered['turnover_rate'] < 10)
             ]
             logger.info(f"规则3(换手率5-10%): 剩余 {len(df_filtered)} 只")
         
         # 市值: 50亿 < 市值 < 200亿
-        cap_col = col_map.get("总市值")
-        if cap_col and cap_col in df_filtered.columns:
-            # 市值单位通常是"亿"
+        if 'market_cap' in df_filtered.columns:
             df_filtered = df_filtered[
-                (df_filtered[cap_col] > 50) & 
-                (df_filtered[cap_col] < 200)
+                (df_filtered['market_cap'] > 50) & 
+                (df_filtered['market_cap'] < 200)
             ]
             logger.info(f"规则4(市值50-200亿): 剩余 {len(df_filtered)} 只")
         
         # 规则5-7: 需要历史数据检查
         for _, row in df_filtered.iterrows():
-            code = str(row.get(col_map.get("代码", "代码"), ""))
-            name = str(row.get(col_map.get("名称", "名称"), ""))
+            code = str(row.get("code", ""))
+            name = str(row.get("name", ""))
             
             if not code:
                 continue
@@ -170,75 +232,37 @@ class StockSelector:
                 reasons.append("强于大盘")
             
             if reasons:
-                change_pct = row.get(change_col, 0) if change_col else 0
-                volume_ratio = row.get(volume_ratio_col, 0) if volume_ratio_col else 0
-                turnover_rate = row.get(turnover_col, 0) if turnover_col else 0
-                market_cap = row.get(cap_col, 0) if cap_col else 0
-                
                 selected.append(SelectedStock(
                     code=code,
                     name=name,
-                    change_pct=float(change_pct),
-                    volume_ratio=float(volume_ratio),
-                    turnover_rate=float(turnover_rate),
-                    market_cap=float(market_cap),
+                    change_pct=float(row.get("change_pct", 0)),
+                    volume_ratio=float(row.get("volume_ratio", 0)),
+                    turnover_rate=float(row.get("turnover_rate", 0)),
+                    market_cap=float(row.get("market_cap", 0)),
                     reason=",".join(reasons)
                 ))
         
         logger.info(f"规则5-7筛选后: 最终选出 {len(selected)} 只股票")
         return selected[:50]  # 最多返回50只
 
-    def _get_column_map(self, df: pd.DataFrame) -> dict:
-        """获取列名映射（兼容不同版本的akshare列名）"""
-        cols = df.columns.tolist()
-        
-        mapping = {
-            "代码": None,
-            "名称": None,
-            "涨跌幅": None,
-            "量比": None,
-            "换手率": None,
-            "总市值": None,
-        }
-        
-        for col in cols:
-            col_lower = col.lower()
-            if "代码" in col or col_lower == "code":
-                mapping["代码"] = col
-            elif "名称" in col or col_lower == "name":
-                mapping["名称"] = col
-            elif "涨跌幅" in col or "涨幅" in col or col_lower in ["pct", "change"]:
-                mapping["涨跌幅"] = col
-            elif "量比" in col or col_lower == "volume_ratio":
-                mapping["量比"] = col
-            elif "换手率" in col or "换手" in col or col_lower in ["turnover", "turnover_rate"]:
-                mapping["换手率"] = col
-            elif "市值" in col or "cap" in col_lower:
-                mapping["总市值"] = col
-        
-        return mapping
-
     def _check_volume_increasing(self, stock_code: str) -> bool:
-        """检查成交量是否持续放大"""
+        """检查成交量是否持续放大（使用Tushare）"""
         try:
-            import akshare as ak
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=20)).strftime('%Y%m%d')
             
-            # 获取近5日成交量
-            end_date = datetime.now().strftime("%Y%m%d")
-            df = ak.stock_zh_a_hist_em(
-                symbol=stock_code,
-                period="daily",
-                start_date="20250101",
-                end_date=end_date,
-                adjust="qfq"
+            daily_data = self.fetcher.get_daily_data(
+                stock_code, 
+                start_date=start_date, 
+                end_date=end_date
             )
             
-            if df is None or len(df) < 5:
+            if daily_data is None or len(daily_data) < 5:
                 return False
             
             # 简单判断：最近3天成交量大于前3天
-            recent = df["成交量"].tail(3).mean()
-            earlier = df["成交量"].iloc[:-3].mean() if len(df) > 3 else 0
+            recent = daily_data['vol'].tail(3).mean()
+            earlier = daily_data['vol'].iloc[:-3].mean() if len(daily_data) > 3 else 0
             
             return recent > earlier * 1.2
             
@@ -247,32 +271,30 @@ class StockSelector:
             return False
 
     def _check_ma_trend(self, stock_code: str) -> bool:
-        """检查短期均线和60日线趋势"""
+        """检查短期均线和60日线趋势（使用Tushare）"""
         try:
-            import akshare as ak
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=90)).strftime('%Y%m%d')
             
-            end_date = datetime.now().strftime("%Y%m%d")
-            df = ak.stock_zh_a_hist_em(
-                symbol=stock_code,
-                period="daily",
-                start_date="20250101",
-                end_date=end_date,
-                adjust="qfq"
+            daily_data = self.fetcher.get_daily_data(
+                stock_code, 
+                start_date=start_date, 
+                end_date=end_date
             )
             
-            if df is None or len(df) < 60:
+            if daily_data is None or len(daily_data) < 60:
                 return False
             
             # 检查60日线向上
-            ma60_now = df["收盘"].iloc[-1]
-            ma60_20d_ago = df["收盘"].iloc[-20] if len(df) >= 20 else df["收盘"].iloc[0]
+            latest_close = daily_data['close'].iloc[-1]
+            ma60_20d_ago = daily_data['close'].iloc[-20] if len(daily_data) >= 20 else daily_data['close'].iloc[0]
             
-            if ma60_now <= ma60_20d_ago:
+            if latest_close <= ma60_20d_ago:
                 return False
             
             # 检查短期均线(5日,10日)向上
-            ma5_now = df["收盘"].tail(5).mean()
-            ma5_5d_ago = df["收盘"].iloc[-10:].mean() if len(df) >= 10 else df["收盘"].mean()
+            ma5_now = daily_data['close'].tail(5).mean()
+            ma5_5d_ago = daily_data['close'].iloc[-10:].mean() if len(daily_data) >= 10 else daily_data['close'].mean()
             
             return ma5_now > ma5_5d_ago
             
@@ -281,24 +303,20 @@ class StockSelector:
             return False
 
     def _check_strength_vs_market(self, stock_code: str) -> bool:
-        """检查分时图是否比大盘强"""
+        """检查分时图是否比大盘强（使用Tushare）"""
         try:
-            import akshare as ak
-            
-            # 获取上证指数对比
-            today = datetime.now().strftime("%Y%m%d")
-            
-            # 尝试获取上证指数数据
+            # 获取上证指数数据
+            market_change = 0.0
             try:
-                index_df = ak.index_zh_a_hist(
-                    symbol="000001",
-                    period="daily",
-                    start_date="20250101",
-                    end_date=today
+                index_data = self.fetcher.get_daily_data(
+                    "000001",
+                    start_date=(datetime.now() - timedelta(days=5)).strftime('%Y%m%d'),
+                    end_date=datetime.now().strftime('%Y%m%d')
                 )
-                market_change = index_df["涨跌幅"].iloc[-1] if index_df is not None and len(index_df) > 0 else 0
-            except:
-                market_change = 0
+                if index_data is not None and len(index_data) > 0:
+                    market_change = float(index_data['pct_chg'].iloc[-1] or 0)
+            except Exception as e:
+                logger.debug(f"获取上证指数失败: {e}")
             
             # 获取个股今日涨跌幅
             quote = self.fetcher.get_realtime_quote(stock_code)

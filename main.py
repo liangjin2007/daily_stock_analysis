@@ -128,9 +128,15 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        '--no-market-review',
+        '--stocks-review',
         action='store_true',
-        help='跳过大盘复盘分析'
+        help='仅运行股票分析，跳过大盘复盘'
+    )
+
+    parser.add_argument(
+        '--stocks-selection',
+        action='store_true',
+        help='运行选股模式：根据选股规则筛选股票并生成报告'
     )
 
     parser.add_argument(
@@ -244,7 +250,7 @@ def _compute_trading_day_filter(
         if mkt in open_markets or mkt is None:
             filtered_codes.append(code)
 
-    if config.market_review_enabled and not getattr(args, 'no_market_review', False):
+    if config.market_review_enabled and not (getattr(args, 'stocks_review', False) or getattr(args, 'no_market_review', False)):
         effective_region = compute_effective_region(
             getattr(config, 'market_review_region', 'cn') or 'cn', open_markets
         )
@@ -290,10 +296,11 @@ def run_full_analysis(
             config.single_stock_notify = True
 
         # Issue #190: 个股与大盘复盘合并推送
+        is_stocks_only_mode = getattr(args, 'stocks_review', False) or getattr(args, 'no_market_review', False)
         merge_notification = (
             getattr(config, 'merge_email_notification', False)
             and config.market_review_enabled
-            and not getattr(args, 'no_market_review', False)
+            and not is_stocks_only_mode
             and not config.single_stock_notify
         )
 
@@ -323,7 +330,7 @@ def run_full_analysis(
         if (
             analysis_delay > 0
             and config.market_review_enabled
-            and not args.no_market_review
+            and not (getattr(args, 'stocks_review', False) or getattr(args, 'no_market_review', False))
             and effective_region != ''
         ):
             logger.info(f"等待 {analysis_delay} 秒后执行大盘复盘（避免API限流）...")
@@ -331,9 +338,10 @@ def run_full_analysis(
 
         # 2. 运行大盘复盘（如果启用且不是仅个股模式）
         market_report = ""
+        is_stocks_only_mode = getattr(args, 'stocks_review', False) or getattr(args, 'no_market_review', False)
         if (
             config.market_review_enabled
-            and not args.no_market_review
+            and not is_stocks_only_mode
             and effective_region != ''
         ):
             review_result = run_market_review(
@@ -670,6 +678,87 @@ def main() -> int:
                 send_notification=not args.no_notify,
                 override_region=effective_region,
             )
+            return 0
+
+        # 模式1.5: 仅股票分析（跳过大盘复盘）
+        if args.stocks_review:
+            logger.info("模式: 仅股票分析（跳过大盘复盘）")
+            # 设置 args.no_market_review = True 以便传递给 run_full_analysis
+            args.no_market_review = True
+            run_full_analysis(config, args, stock_codes)
+            return 0
+
+        # 模式1.6: 选股模式
+        if args.stocks_selection:
+            logger.info("模式: 选股模式")
+            from src.stock_selector import run_daily_selection, StockSelector
+
+            # 执行选股
+            selector = StockSelector()
+            results = selector.select_stocks()
+
+            if not results:
+                logger.warning("未选出符合条件的股票")
+                return 0
+
+            # 保存选股结果到文件
+            selector.save_to_file()
+
+            # 生成报告
+            selected_codes = selector.get_stock_codes()
+            logger.info(f"选股完成，选出 {len(results)} 只股票: {selected_codes}")
+
+            # 生成 report.md 报告
+            from datetime import datetime
+            report_path = "reports/report.md"
+            import os
+            os.makedirs("reports", exist_ok=True)
+
+            report_content = f"""# 选股报告
+
+更新日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## 选股结果
+
+共选出 {len(results)} 只符合条件的股票：
+
+| 代码 | 名称 | 涨幅% | 量比 | 换手率% | 市值(亿) | 入选原因 |
+|------|------|-------|------|---------|----------|----------|
+"""
+            for stock in results:
+                report_content += f"| {stock.code} | {stock.name} | {stock.change_pct:.2f} | {stock.volume_ratio:.2f} | {stock.turnover_rate:.2f} | {stock.market_cap:.0f} | {stock.reason} |\n"
+
+            report_content += f"""
+## 选股规则
+
+见 [SelectionRule.md](./SelectionRule.md)
+
+## 选股代码
+
+```
+{selected_codes}
+```
+
+## 使用说明
+
+可以将选出的股票代码复制到 STOCK_LIST 环境变量中，或直接在分析时使用：
+
+```bash
+python main.py --stocks {selected_codes}
+```
+"""
+
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+
+            logger.info(f"选股报告已保存到 {report_path}")
+
+            # 可选：执行股票分析
+            if not args.no_notify and (config.gemini_api_key or config.openai_api_key):
+                logger.info("开始对选出的股票进行智能分析...")
+                args.no_market_review = True
+                run_full_analysis(config, args, selected_codes.split(','))
+
             return 0
 
         # 模式2: 定时任务模式

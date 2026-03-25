@@ -709,44 +709,42 @@ def main() -> int:
             logger.info(f"选股完成，选出 {len(results)} 只股票: {selected_codes}")
 
             # 生成 report.md 报告
-            from datetime import datetime
             report_path = "reports/report.md"
-            import os
             os.makedirs("reports", exist_ok=True)
 
             report_content = f"""# 选股报告
 
-更新日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            更新日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-## 选股结果
+            ## 选股结果
 
-共选出 {len(results)} 只符合条件的股票：
+            共选出 {len(results)} 只符合条件的股票：
 
-| 代码 | 名称 | 涨幅% | 量比 | 换手率% | 市值(亿) | 入选原因 |
-|------|------|-------|------|---------|----------|----------|
-"""
+            | 代码 | 名称 | 涨幅% | 量比 | 换手率% | 市值(亿) | 入选原因 |
+            |------|------|-------|------|---------|----------|----------|
+            """
             for stock in results:
                 report_content += f"| {stock.code} | {stock.name} | {stock.change_pct:.2f} | {stock.volume_ratio:.2f} | {stock.turnover_rate:.2f} | {stock.market_cap:.0f} | {stock.reason} |\n"
 
             report_content += f"""
-## 选股规则
+            ## 选股规则
 
-见 [SelectionRule.md](./SelectionRule.md)
+            见 [SelectionRule.md](./SelectionRule.md)
 
-## 选股代码
+            ## 选股代码
 
-```
-{selected_codes}
-```
+            ```
+            {selected_codes}
+            ```
 
-## 使用说明
+            ## 使用说明
 
-可以将选出的股票代码复制到 STOCK_LIST 环境变量中，或直接在分析时使用：
+            可以将选出的股票代码复制到 STOCK_LIST 环境变量中，或直接在分析时使用：
 
-```bash
-python main.py --stocks {selected_codes}
-```
-"""
+            ```bash
+            python main.py --stocks {selected_codes}
+            ```
+            """
 
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write(report_content)

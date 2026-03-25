@@ -658,7 +658,7 @@ class Config:
 
     # === 自动选股配置 ===
     # 是否启用每日自动选股（根据 SelectionRule.md 规则）
-    stock_selection_enabled: bool = False
+    stock_selection_enabled: bool = True
     # 选股任务执行时间（HH:MM 格式），默认凌晨 2:30
     stock_selection_time: str = "02:30"
     # 选股完成后是否立即执行一次分析

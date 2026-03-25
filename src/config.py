@@ -656,6 +656,14 @@ class Config:
     # 交易日检查：默认启用，非交易日跳过执行；设为 false 或 --force-run 可强制执行（Issue #373）
     trading_day_check_enabled: bool = True
 
+    # === 自动选股配置 ===
+    # 是否启用每日自动选股（根据 SelectionRule.md 规则）
+    stock_selection_enabled: bool = False
+    # 选股任务执行时间（HH:MM 格式），默认凌晨 2:30
+    stock_selection_time: str = "02:30"
+    # 选股完成后是否立即执行一次分析
+    stock_selection_run_analysis: bool = True
+
     # === 实时行情增强数据配置 ===
     # 实时行情开关（关闭后使用历史收盘价进行分析）
     enable_realtime_quote: bool = True
@@ -1253,6 +1261,10 @@ class Config:
                 os.getenv('MARKET_REVIEW_REGION', 'cn')
             ),
             trading_day_check_enabled=os.getenv('TRADING_DAY_CHECK_ENABLED', 'true').lower() != 'false',
+            # 自动选股配置
+            stock_selection_enabled=os.getenv('STOCK_SELECTION_ENABLED', 'false').lower() == 'true',
+            stock_selection_time=os.getenv('STOCK_SELECTION_TIME', '02:30'),
+            stock_selection_run_analysis=os.getenv('STOCK_SELECTION_RUN_ANALYSIS', 'true').lower() == 'true',
             webui_enabled=os.getenv('WEBUI_ENABLED', 'false').lower() == 'true',
             webui_host=os.getenv('WEBUI_HOST', '127.0.0.1'),
             webui_port=parse_env_int(os.getenv('WEBUI_PORT'), 8000, field_name='WEBUI_PORT', minimum=1, maximum=65535),

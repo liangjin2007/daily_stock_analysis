@@ -61,6 +61,7 @@ class Scheduler:
     - 每日定时执行
     - 启动时立即执行
     - 优雅退出
+    - 多任务调度
     """
     
     def __init__(self, schedule_time: str = "18:00"):
@@ -80,6 +81,8 @@ class Scheduler:
         self.schedule_time = schedule_time
         self.shutdown_handler = GracefulShutdown()
         self._task_callback: Optional[Callable] = None
+        self._selection_task_callback: Optional[Callable] = None
+        self._selection_time: str = "02:30"
         self._running = False
         
     def set_daily_task(self, task: Callable, run_immediately: bool = True):
@@ -99,6 +102,38 @@ class Scheduler:
         if run_immediately:
             logger.info("立即执行一次任务...")
             self._safe_run_task()
+    
+    def set_selection_task(self, task: Callable, selection_time: str = "02:30"):
+        """
+        设置每日选股任务（独立于主任务）
+        
+        Args:
+            task: 要执行的选股任务函数
+            selection_time: 选股任务执行时间，格式 "HH:MM"
+        """
+        self._selection_task_callback = task
+        self._selection_time = selection_time
+        
+        # 设置每日选股任务
+        self.schedule.every().day.at(selection_time).do(self._safe_selection_task)
+        logger.info(f"已设置每日选股任务，执行时间: {selection_time}")
+    
+    def _safe_selection_task(self):
+        """安全执行选股任务"""
+        if self._selection_task_callback is None:
+            return
+        
+        try:
+            logger.info("=" * 50)
+            logger.info(f"选股任务开始执行 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info("=" * 50)
+            
+            self._selection_task_callback()
+            
+            logger.info(f"选股任务执行完成 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+        except Exception as e:
+            logger.exception(f"选股任务执行失败: {e}")
     
     def _safe_run_task(self):
         """安全执行任务（带异常捕获）"""
@@ -153,7 +188,9 @@ class Scheduler:
 def run_with_schedule(
     task: Callable,
     schedule_time: str = "18:00",
-    run_immediately: bool = True
+    run_immediately: bool = True,
+    selection_task: Optional[Callable] = None,
+    selection_time: str = "02:30"
 ):
     """
     便捷函数：使用定时调度运行任务
@@ -162,9 +199,16 @@ def run_with_schedule(
         task: 要执行的任务函数
         schedule_time: 每日执行时间
         run_immediately: 是否立即执行一次
+        selection_task: 选股任务函数（可选）
+        selection_time: 选股任务执行时间
     """
     scheduler = Scheduler(schedule_time=schedule_time)
     scheduler.set_daily_task(task, run_immediately=run_immediately)
+    
+    # 如果有选股任务，添加到调度器
+    if selection_task:
+        scheduler.set_selection_task(selection_task, selection_time)
+    
     scheduler.run()
 
 

@@ -692,10 +692,36 @@ def main() -> int:
             def scheduled_task():
                 run_full_analysis(config, args, scheduled_stock_codes)
 
+            # 选股任务（如果启用）
+            selection_task = None
+            if config.stock_selection_enabled:
+                from src.stock_selector import run_daily_selection
+                
+                def selection_task_wrapper():
+                    logger.info("开始执行每日选股任务...")
+                    selected_codes = run_daily_selection()
+                    if selected_codes:
+                        logger.info(f"选股完成，选出股票: {selected_codes}")
+                        # 更新环境变量中的 STOCK_LIST
+                        os.environ['STOCK_LIST'] = selected_codes
+                        # 如果配置了选股后立即分析，执行分析
+                        if config.stock_selection_run_analysis:
+                            logger.info("选股完成，开始执行股票分析...")
+                            # 重新解析股票列表
+                            from src.config import Config
+                            updated_config = Config.from_env()
+                            run_full_analysis(updated_config, args, selected_codes.split(','))
+                    else:
+                        logger.warning("未选出符合条件的股票")
+                
+                selection_task = selection_task_wrapper
+
             run_with_schedule(
                 task=scheduled_task,
                 schedule_time=config.schedule_time,
-                run_immediately=should_run_immediately
+                run_immediately=should_run_immediately,
+                selection_task=selection_task,
+                selection_time=config.stock_selection_time
             )
             return 0
 

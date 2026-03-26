@@ -131,7 +131,13 @@ class StockSelector:
             
             for i, code in enumerate(codes):
                 try:
-                    # 获取最近几天的日线数据
+                    # 获取实时行情（包含换手率、市值、量比等）
+                    quote = self.fetcher.get_realtime_quote(code)
+                    
+                    if quote is None:
+                        continue
+                    
+                    # 获取最近几天的日线数据用于计算量比和涨幅
                     daily_data = self.fetcher.get_daily_data(
                         code, 
                         start_date=start_date, 
@@ -141,30 +147,29 @@ class StockSelector:
                     if daily_data is None or daily_data.empty:
                         continue
                     
-                    # 取最新一天的数据
-                    latest = daily_data.iloc[0]
-                    prev_day = daily_data.iloc[1] if len(daily_data) > 1 else None
-                    
-                    # 计算涨跌幅
-                    change_pct = float(latest.get('pct_chg', 0) or 0)
-                    
-                    # 计算量比（今日成交量/昨日成交量）
+                    # 计算量比（今日成交量/过去5日平均成交量）
                     volume_ratio = 1.0
-                    if prev_day is not None and prev_day.get('vol', 0):
-                        volume_ratio = latest.get('vol', 0) / prev_day.get('vol', 1)
+                    if len(daily_data) >= 5:
+                        latest_vol = daily_data['vol'].iloc[0]
+                        # 过去5日平均成交量（不包括今天）
+                        avg_vol_5d = daily_data['vol'].iloc[1:6].mean()
+                        if avg_vol_5d and avg_vol_5d > 0:
+                            volume_ratio = latest_vol / avg_vol_5d
                     
-                    # 换手率（需要用成交量/流通股本）
-                    # 这里用 amount/总市值 近似
-                    turnover_rate = 0.0
-                    if latest.get('amount') and latest.get('total_mv'):
-                        turnover_rate = (latest.get('amount', 0) / latest.get('total_mv', 1)) * 100
+                    # 涨跌幅从实时行情获取
+                    change_pct = quote.change_pct if quote.change_pct else 0.0
                     
-                    # 市值（单位：亿）
-                    market_cap = float(latest.get('total_mv', 0) or 0) / 10000  # 转为亿
+                    # 换手率从实时行情获取
+                    turnover_rate = quote.turnover_rate if quote.turnover_rate else 0.0
+                    
+                    # 市值从实时行情获取（单位：亿）
+                    market_cap = 0.0
+                    if quote.total_mv:
+                        market_cap = quote.total_mv / 10000  # 转为亿
                     
                     all_quotes.append({
                         'code': code,
-                        'name': latest.get('name', code),
+                        'name': quote.name or code,
                         'change_pct': change_pct,
                         'volume_ratio': volume_ratio,
                         'turnover_rate': turnover_rate,

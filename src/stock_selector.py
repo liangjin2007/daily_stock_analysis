@@ -101,9 +101,31 @@ class StockSelector:
             all_quotes = []
             
             # 获取所有A股股票代码
-            codes = stock_list['code'].tolist()
-            logger.info(f"总股票数 {len(codes)}")
-            logger.info(f"所有股票代码为： {codes}")
+            codes_ = stock_list['code'].tolist()
+            logger.info(f"总股票数 {len(codes_)}")
+            logger.info(f"所有股票代码为： {codes_}")
+
+            """
+            股票代码编码规律
+            ‌沪A（上海证券交易所）‌
+
+            ‌主板A股‌：以 ‌600、601、603、605‌ 开头
+            （如：600519 贵州茅台）
+            ‌科创板A股‌：以 ‌688‌ 开头
+            （如：688981 中芯国际）
+            ‌B股‌：以 ‌900‌ 开头
+
+            ‌深A（深圳证券交易所）‌
+            ‌主板A股‌：以 ‌000、001、002、003‌ 开头
+            （如：000001 平安银行）
+            ‌创业板A股‌：以 ‌300、301‌ 开头
+            （如：300750 宁德时代）
+            ‌B股‌：以 ‌200‌ 开头
+            """
+            codes = []
+            for code in codes_:
+                if code.startswith(('600', '601', '603', '605')):
+                    codes.append(code)
 
             logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
             

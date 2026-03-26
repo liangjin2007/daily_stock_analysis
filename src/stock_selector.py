@@ -211,8 +211,10 @@ class StockSelector:
             ]
             logger.info(f"规则1(涨幅3-5%): 剩余 {len(df_filtered)} 只")
         
+        logger.info(f"df_filtered data:  {df_filtered.to_list()}")
+
         # 量比 > 1
-        if 'volume_ratio' in df_filtered.columns:
+        if 'volume_ratio' in df_filtered.columns:    
             df_filtered = df_filtered[df_filtered['volume_ratio'] > 1]
             logger.info(f"规则2(量比>1): 剩余 {len(df_filtered)} 只")
         

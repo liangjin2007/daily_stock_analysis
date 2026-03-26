@@ -100,10 +100,13 @@ class StockSelector:
             # 收集所有股票的实时数据
             all_quotes = []
             
-            # 限制处理数量，避免API调用过多
-            max_stocks = 200  # 处理前200只进行筛选演示
-            codes = stock_list['code'].tolist()[:max_stocks]
-            
+            # 获取所有A股股票代码
+            codes_ = stock_list['code'].tolist()
+            codes = []
+            for code in codes_:
+                if code.endswith('.SH'):
+                    codes.append(code)
+
             logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
             
             for i, code in enumerate(codes):

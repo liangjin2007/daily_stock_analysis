@@ -101,14 +101,9 @@ class StockSelector:
             all_quotes = []
             
             # 获取所有A股股票代码
-            codes_ = stock_list['code'].tolist()
-            logger.info(f"总股票数 {len(codes_)}")
-            logger.info(f"所有股票代码为： {codes_}")
-
-            codes = []
-            for code in codes_:
-                if code.endswith('.SH'):
-                    codes.append(code)
+            codes = stock_list['code'].tolist()
+            logger.info(f"总股票数 {len(codes)}")
+            logger.info(f"所有股票代码为： {codes}")
 
             logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
             

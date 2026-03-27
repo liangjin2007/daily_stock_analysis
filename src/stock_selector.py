@@ -102,42 +102,36 @@ class StockSelector:
             
             # 获取所有A股股票代码
             codes_ = stock_list['code'].tolist()
+            
+            # 预先获取股票名称缓存
+            stock_names = {}
+            for _, row in stock_list.iterrows():
+                stock_names[row['code']] = row.get('name', row['code'])
+            
             logger.info(f"总股票数 {len(codes_)}")
-            logger.info(f"所有股票代码为： {codes_}")
 
             """
             股票代码编码规律
             ‌沪A（上海证券交易所）‌
-
             ‌主板A股‌：以 ‌600、601、603、605‌ 开头
-            （如：600519 贵州茅台）
             ‌科创板A股‌：以 ‌688‌ 开头
-            （如：688981 中芯国际）
             ‌B股‌：以 ‌900‌ 开头
 
             ‌深A（深圳证券交易所）‌
             ‌主板A股‌：以 ‌000、001、002、003‌ 开头
-            （如：000001 平安银行）
             ‌创业板A股‌：以 ‌300、301‌ 开头
-            （如：300750 宁德时代）
             ‌B股‌：以 ‌200‌ 开头
             """
             codes = []
             for code in codes_:
-                if code.startswith(('600', '601', '603', '605')):
+                if code.startswith(('600', '601', '603', '605', '688')):
                     codes.append(code)
 
             logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
             
             for i, code in enumerate(codes):
                 try:
-                    # 获取实时行情（包含换手率、市值、量比等）
-                    quote = self.fetcher.get_realtime_quote(code)
-                    
-                    if quote is None:
-                        continue
-                    
-                    # 获取最近几天的日线数据用于计算量比和涨幅
+                    # 获取最近几天的日线数据用于计算所有指标
                     daily_data = self.fetcher.get_daily_data(
                         code, 
                         start_date=start_date, 
@@ -147,29 +141,41 @@ class StockSelector:
                     if daily_data is None or daily_data.empty:
                         continue
                     
+                    # daily_data 的列名已经被标准化为: date, open, high, low, close, volume, amount, pct_chg
+                    latest = daily_data.iloc[0]
+                    
+                    # 涨跌幅
+                    change_pct = float(latest.get('pct_chg', 0) or 0)
+                    
                     # 计算量比（今日成交量/过去5日平均成交量）
                     volume_ratio = 1.0
-                    if len(daily_data) >= 5:
-                        latest_vol = daily_data['vol'].iloc[0]
+                    if len(daily_data) >= 6:
+                        latest_vol = latest.get('volume', 0)
                         # 过去5日平均成交量（不包括今天）
-                        avg_vol_5d = daily_data['vol'].iloc[1:6].mean()
+                        avg_vol_5d = daily_data['volume'].iloc[1:6].mean()
                         if avg_vol_5d and avg_vol_5d > 0:
                             volume_ratio = latest_vol / avg_vol_5d
                     
-                    # 涨跌幅从实时行情获取
-                    change_pct = quote.change_pct if quote.change_pct else 0.0
+                    # 换手率：使用 amount / (close * 总股本) 估算
+                    # 由于没有总股本数据，使用 amount / (close * 流通股本) 
+                    # 这里简化为：成交额/市值 = amount/(close * share_count)
+                    # 更简单的方式：用 amount / (close * 100000000) 作为近似
+                    turnover_rate = 0.0
+                    if latest.get('amount') and latest.get('close') and latest.get('close') > 0:
+                        # 假设流通股本为1亿股（这是一个近似值，需要从基本面数据获取）
+                        # 这里用成交额/股价/1亿来近似换手率
+                        circ_shares = 100000000  # 1亿股
+                        turnover_rate = (latest.get('amount', 0) / latest.get('close', 1) / circ_shares) * 100
                     
-                    # 换手率从实时行情获取
-                    turnover_rate = quote.turnover_rate if quote.turnover_rate else 0.0
-                    
-                    # 市值从实时行情获取（单位：亿）
+                    # 市值：需要用基本接口获取，这里暂时设为0
                     market_cap = 0.0
-                    if quote.total_mv:
-                        market_cap = quote.total_mv / 10000  # 转为亿
+                    
+                    # 股票名称
+                    name = stock_names.get(code, code)
                     
                     all_quotes.append({
                         'code': code,
-                        'name': quote.name or code,
+                        'name': name,
                         'change_pct': change_pct,
                         'volume_ratio': volume_ratio,
                         'turnover_rate': turnover_rate,

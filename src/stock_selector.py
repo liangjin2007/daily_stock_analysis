@@ -79,118 +79,71 @@ class StockSelector:
             return []
 
     def _get_all_a_stocks(self) -> pd.DataFrame:
-        """获取全部A股实时行情"""
-        logger.info("[API调用] 获取A股实时行情...")
+        """获取全部A股实时行情（使用akshare一次性获取所有数据）"""
+        logger.info("[akshare API调用] 获取A股实时行情...")
         
         try:
-            # 使用 Tushare 的 stock_basic 获取股票列表
-            stock_list = self.fetcher.get_stock_list()
-            if stock_list is None or stock_list.empty:
-                logger.warning("Tushare 获取股票列表失败")
+            import akshare as ak
+            
+            # 一次性获取所有A股实时行情，包含：涨跌幅、量比、换手率、市值等
+            df = ak.stock_zh_a_spot_em()
+            
+            if df is None or df.empty:
+                logger.warning("akshare 获取A股实时行情失败")
                 return pd.DataFrame()
             
-            # 获取实时行情（需要逐个获取或使用其他接口）
-            # 这里我们用 Tushare 的 daily 接口获取最近交易日数据
-            # 然后获取前几天的数据来计算各项指标
+            logger.info(f"akshare 获取到 {len(df)} 只股票")
             
-            # 获取最近 5 个交易日的数据
-            end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+            # 列名映射（akshare返回的中文列名）
+            # 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅, 最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率, 市净率, 总市值, 流通市值
             
-            # 收集所有股票的实时数据
+            # 过滤只保留沪市主板和科创板（600, 601, 603, 605, 688开头）
+            df = df[df['代码'].str.startswith(('600', '601', '603', '605', '688'), na=False)]
+            
+            logger.info(f"过滤后沪市股票 {len(df)} 只")
+            
+            # 转换数据格式（akshare直接提供所有需要的数据）
             all_quotes = []
-            
-            # 获取所有A股股票代码
-            codes_ = stock_list['code'].tolist()
-            
-            # 预先获取股票名称缓存
-            stock_names = {}
-            for _, row in stock_list.iterrows():
-                stock_names[row['code']] = row.get('name', row['code'])
-            
-            logger.info(f"总股票数 {len(codes_)}")
-
-            """
-            股票代码编码规律
-            ‌沪A（上海证券交易所）‌
-            ‌主板A股‌：以 ‌600、601、603、605‌ 开头
-            ‌科创板A股‌：以 ‌688‌ 开头
-            ‌B股‌：以 ‌900‌ 开头
-
-            ‌深A（深圳证券交易所）‌
-            ‌主板A股‌：以 ‌000、001、002、003‌ 开头
-            ‌创业板A股‌：以 ‌300、301‌ 开头
-            ‌B股‌：以 ‌200‌ 开头
-            """
-            codes = []
-            for code in codes_:
-                if code.startswith(('600', '601', '603', '605', '688')):
-                    codes.append(code)
-
-            logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
-            
-            # 批量获取市值缓存（避免逐个调用API）
-            market_cap_cache = self._get_market_cap_bulk_akshare(codes)
-            
-            for i, code in enumerate(codes):
+            for _, row in df.iterrows():
+                code = str(row.get('代码', ''))
+                name = str(row.get('名称', ''))
+                
+                # 涨跌幅
+                change_pct = row.get('涨跌幅')
                 try:
-                    # 获取最近几天的日线数据用于计算所有指标
-                    daily_data = self.fetcher.get_daily_data(
-                        code, 
-                        start_date=start_date, 
-                        end_date=end_date
-                    )
-                    
-                    if daily_data is None or daily_data.empty:
-                        continue
-                    
-                    # daily_data 的列名已经被标准化为: date, open, high, low, close, volume, amount, pct_chg
-                    latest = daily_data.iloc[0]
-                    
-                    # 涨跌幅
-                    change_pct = float(latest.get('pct_chg', 0) or 0)
-                    
-                    # 计算量比（今日成交量/过去5日平均成交量）
+                    change_pct = float(change_pct) if change_pct and change_pct != '-' else 0.0
+                except:
+                    change_pct = 0.0
+                
+                # 量比
+                volume_ratio = row.get('量比')
+                try:
+                    volume_ratio = float(volume_ratio) if volume_ratio and volume_ratio != '-' else 1.0
+                except:
                     volume_ratio = 1.0
-                    if len(daily_data) >= 6:
-                        latest_vol = latest.get('volume', 0)
-                        # 过去5日平均成交量（不包括今天）
-                        avg_vol_5d = daily_data['volume'].iloc[1:6].mean()
-                        if avg_vol_5d and avg_vol_5d > 0:
-                            volume_ratio = latest_vol / avg_vol_5d
-                    
-                    # 换手率：使用 amount / (close * 总股本) 估算
-                    # 由于没有总股本数据，使用 amount / (close * 流通股本) 
-                    # 这里简化为：成交额/市值 = amount/(close * share_count)
-                    # 更简单的方式：用 amount / (close * 100000000) 作为近似
+                
+                # 换手率
+                turnover_rate = row.get('换手率')
+                try:
+                    turnover_rate = float(turnover_rate) if turnover_rate and turnover_rate != '-' else 0.0
+                except:
                     turnover_rate = 0.0
-                    if latest.get('amount') and latest.get('close') and latest.get('close') > 0:
-                        # 假设流通股本为1亿股（这是一个近似值，需要从基本面数据获取）
-                        # 这里用成交额/股价/1亿来近似换手率
-                        circ_shares = 100000000  # 1亿股
-                        turnover_rate = (latest.get('amount', 0) / latest.get('close', 1) / circ_shares) * 100
-                    
-                    # 市值：使用akshare批量获取
-                    market_cap = market_cap_cache.get(code, 0.0)
-                    
-                    # 股票名称
-                    name = stock_names.get(code, code)
-                    
-                    all_quotes.append({
-                        'code': code,
-                        'name': name,
-                        'change_pct': change_pct,
-                        'volume_ratio': volume_ratio,
-                        'turnover_rate': turnover_rate,
-                        'market_cap': market_cap/100000000.0,  # 转换为亿*/
-                    })
-                    
-                    if (i + 1) % 50 == 0:
-                        logger.info(f"已处理 {i + 1}/{len(codes)} 只股票")
-                        
-                except Exception as e:
-                    logger.debug(f"获取 {code} 数据失败: {e}")
-                    continue
+                
+                # 市值（单位：亿）
+                total_mv = row.get('总市值')
+                try:
+                    market_cap = float(total_mv) if total_mv and total_mv != '-' else 0.0
+                except:
+                    market_cap = 0.0
+                
+                all_quotes.append({
+                    'code': code,
+                    'name': name,
+                    'change_pct': change_pct,
+                    'volume_ratio': volume_ratio,
+                    'turnover_rate': turnover_rate,
+                    'market_cap': market_cap,
+                })
             
             logger.info(f"成功获取 {len(all_quotes)} 只股票数据")
             return pd.DataFrame(all_quotes)
@@ -198,28 +151,6 @@ class StockSelector:
         except Exception as e:
             logger.exception(f"获取A股数据失败: {e}")
             return pd.DataFrame()
-    
-    def _get_market_cap_bulk_akshare(self, codes: List[str]) -> dict:
-        """使用akshare批量获取股票市值"""
-        market_cap_cache = {}
-        try:
-            import akshare as ak
-            logger.info("[akshare] 批量获取股票市值...")
-            df = ak.stock_zh_a_spot_em()
-            # 创建代码到市值的映射
-            for _, row in df.iterrows():
-                code = str(row.get('代码', ''))
-                if code in codes:
-                    total_mv = row.get('总市值')
-                    if total_mv and total_mv != '-':
-                        try:
-                            market_cap_cache[code] = float(total_mv)
-                        except:
-                            market_cap_cache[code] = 0.0
-            logger.info(f"[akshare] 成功获取 {len(market_cap_cache)} 只股票市值")
-        except Exception as e:
-            logger.warning(f"[akshare] 批量获取市值失败: {e}")
-        return market_cap_cache
 
     def _apply_rules(self, df: pd.DataFrame) -> List[SelectedStock]:
         """

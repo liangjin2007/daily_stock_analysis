@@ -182,7 +182,7 @@ class StockSelector:
                         'change_pct': change_pct,
                         'volume_ratio': volume_ratio,
                         'turnover_rate': turnover_rate,
-                        'market_cap': market_cap,
+                        'market_cap': market_cap/100000000.0,  # 转换为亿*/
                     })
                     
                     if (i + 1) % 50 == 0:

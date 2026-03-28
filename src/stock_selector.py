@@ -129,6 +129,9 @@ class StockSelector:
 
             logger.info(f"开始获取 {len(codes)} 只股票的实时数据...")
             
+            # 批量获取市值缓存（避免逐个调用API）
+            market_cap_cache = self._get_market_cap_bulk_akshare(codes)
+            
             for i, code in enumerate(codes):
                 try:
                     # 获取最近几天的日线数据用于计算所有指标
@@ -167,8 +170,8 @@ class StockSelector:
                         circ_shares = 100000000  # 1亿股
                         turnover_rate = (latest.get('amount', 0) / latest.get('close', 1) / circ_shares) * 100
                     
-                    # 市值：需要用基本接口获取，这里暂时设为0
-                    market_cap = 0.0
+                    # 市值：使用akshare批量获取
+                    market_cap = market_cap_cache.get(code, 0.0)
                     
                     # 股票名称
                     name = stock_names.get(code, code)
@@ -195,6 +198,28 @@ class StockSelector:
         except Exception as e:
             logger.exception(f"获取A股数据失败: {e}")
             return pd.DataFrame()
+    
+    def _get_market_cap_bulk_akshare(self, codes: List[str]) -> dict:
+        """使用akshare批量获取股票市值"""
+        market_cap_cache = {}
+        try:
+            import akshare as ak
+            logger.info("[akshare] 批量获取股票市值...")
+            df = ak.stock_zh_a_spot_em()
+            # 创建代码到市值的映射
+            for _, row in df.iterrows():
+                code = str(row.get('代码', ''))
+                if code in codes:
+                    total_mv = row.get('总市值')
+                    if total_mv and total_mv != '-':
+                        try:
+                            market_cap_cache[code] = float(total_mv)
+                        except:
+                            market_cap_cache[code] = 0.0
+            logger.info(f"[akshare] 成功获取 {len(market_cap_cache)} 只股票市值")
+        except Exception as e:
+            logger.warning(f"[akshare] 批量获取市值失败: {e}")
+        return market_cap_cache
 
     def _apply_rules(self, df: pd.DataFrame) -> List[SelectedStock]:
         """

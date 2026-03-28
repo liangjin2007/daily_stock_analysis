@@ -198,8 +198,8 @@ class StockSelector:
         # 市值: 50亿 < 市值 < 200亿
         if 'market_cap' in df_filtered.columns:
             df_filtered = df_filtered[
-                (df_filtered['market_cap'] > 50) & 
-                (df_filtered['market_cap'] < 200)
+                (df_filtered['market_cap'] > 50*1e8) & 
+                (df_filtered['market_cap'] < 200*1e8)
             ]
             logger.info(f"规则4(市值50-200亿): 剩余 {len(df_filtered)} 只")
         
@@ -232,7 +232,7 @@ class StockSelector:
                     change_pct=float(row.get("change_pct", 0)),
                     volume_ratio=float(row.get("volume_ratio", 0)),
                     turnover_rate=float(row.get("turnover_rate", 0)),
-                    market_cap=float(row.get("market_cap", 0)),
+                    market_cap=float(row.get("market_cap", 0)/1e8),  # 转换为亿
                     reason=",".join(reasons)
                 ))
         

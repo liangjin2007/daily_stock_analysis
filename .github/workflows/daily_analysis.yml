@@ -260,6 +260,10 @@ jobs:
             python main.py --stocks-review $FORCE_RUN_ARG
           elif [ "$MODE" = "stocks-selection" ]; then
             python main.py --stocks-selection $FORCE_RUN_ARG
+          elif [ "$MODE" = "full" ]; then
+            # full 模式：先执行选股，再执行完整分析
+            python main.py --stocks-selection $FORCE_RUN_ARG
+            python main.py $FORCE_RUN_ARG
           else
             python main.py $FORCE_RUN_ARG
           fi

@@ -5,13 +5,14 @@
 ==================================
 
 根据选股规则每日筛选符合条件的股票：
-1. 3% < 涨幅 < 5%
-2. 量比 > 1
-3. 5% < 换手率 < 10%
-4. 50亿 < 市值 < 200亿
-5. 成交量持续放大
-6. 短期均线搭配60日线向上
-7. 分时图比大盘强
+1. 股票代码以600、603、605开头
+2. 8% < 涨幅 < 12%
+3. 量比 > 1
+4. 5% < 换手率 < 10%
+5. 50亿 < 市值 < 200亿
+6. 成交量持续放大
+7. 短期均线搭配60日线向上
+8. 分时图比大盘强
 """
 
 import logging
@@ -97,10 +98,10 @@ class StockSelector:
             # 列名映射（akshare返回的中文列名）
             # 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅, 最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率, 市净率, 总市值, 流通市值
             
-            # 过滤只保留沪市主板和科创板（600, 601, 603, 605, 688开头）
-            df = df[df['代码'].str.startswith(('600', '601', '603', '605', '688'), na=False)]
+            # 过滤只保留沪市主板（600, 603, 605开头）
+            df = df[df['代码'].str.startswith(('600', '603', '605'), na=False)]
             
-            logger.info(f"过滤后沪市股票 {len(df)} 只")
+            logger.info(f"过滤后沪市主板股票 {len(df)} 只")
             
             # 转换数据格式（akshare直接提供所有需要的数据）
             all_quotes = []
@@ -157,53 +158,50 @@ class StockSelector:
         应用选股规则筛选股票
         
         规则:
-        1. 3% < 涨幅 < 5%
-        2. 量比 > 1
-        3. 5% < 换手率 < 10%
-        4. 50亿 < 市值 < 200亿
-        5. 成交量持续放大（近期成交量上升）
-        6. 短期均线搭配60日线向上
-        7. 分时图比大盘强
+        1. 股票代码以600、603、605开头
+        2. 8% < 涨幅 < 12%
+        3. 量比 > 1
+        4. 5% < 换手率 < 10%
+        5. 50亿 < 市值 < 200亿
+        6. 成交量持续放大（近期成交量上升）
+        7. 短期均线搭配60日线向上
+        8. 分时图比大盘强
         """
         selected: List[SelectedStock] = []
         
-        # 规则1-4: 实时数据筛选
+        # 规则2-5: 实时数据筛选（规则1在数据获取阶段已过滤）
         df_filtered = df.copy()
         
-        logger.info(f"df_filtered columns: {df_filtered.columns}")
-        for col in df_filtered.columns:
-            logger.info(f"df_filtered {col}:  {df_filtered[col]}")
-
-        # 涨幅: 3% < 涨幅 < 5%
+        # 规则2: 8% < 涨幅 < 12%
         if 'change_pct' in df_filtered.columns:
             df_filtered = df_filtered[
-                (df_filtered['change_pct'] > 3) & 
-                (df_filtered['change_pct'] < 5)
+                (df_filtered['change_pct'] > 8) & 
+                (df_filtered['change_pct'] < 12)
             ]
-            logger.info(f"规则1(涨幅3-5%): 剩余 {len(df_filtered)} 只")
+            logger.info(f"规则2(涨幅8-12%): 剩余 {len(df_filtered)} 只")
 
-        # 量比 > 1
+        # 规则3: 量比 > 1
         if 'volume_ratio' in df_filtered.columns:    
             df_filtered = df_filtered[df_filtered['volume_ratio'] > 1]
-            logger.info(f"规则2(量比>1): 剩余 {len(df_filtered)} 只")
+            logger.info(f"规则3(量比>1): 剩余 {len(df_filtered)} 只")
         
-        # 换手率: 5% < 换手率 < 10%
+        # 规则4: 5% < 换手率 < 10%
         if 'turnover_rate' in df_filtered.columns:
             df_filtered = df_filtered[
                 (df_filtered['turnover_rate'] > 5) & 
                 (df_filtered['turnover_rate'] < 10)
             ]
-            logger.info(f"规则3(换手率5-10%): 剩余 {len(df_filtered)} 只")
+            logger.info(f"规则4(换手率5-10%): 剩余 {len(df_filtered)} 只")
         
-        # 市值: 50亿 < 市值 < 200亿
+        # 规则5: 50亿 < 市值 < 200亿
         if 'market_cap' in df_filtered.columns:
             df_filtered = df_filtered[
                 (df_filtered['market_cap'] > 50*1e8) & 
                 (df_filtered['market_cap'] < 200*1e8)
             ]
-            logger.info(f"规则4(市值50-200亿): 剩余 {len(df_filtered)} 只")
+            logger.info(f"规则5(市值50-200亿): 剩余 {len(df_filtered)} 只")
         
-        # 规则5-7: 需要历史数据检查
+        # 规则6-8: 需要历史数据检查
         for _, row in df_filtered.iterrows():
             code = str(row.get("code", ""))
             name = str(row.get("name", ""))
@@ -213,15 +211,15 @@ class StockSelector:
             
             reasons = []
             
-            # 规则5: 成交量持续放大
+            # 规则6: 成交量持续放大
             if self._check_volume_increasing(code):
                 reasons.append("成交量放大")
             
-            # 规则6: 短期均线搭配60日线向上
+            # 规则7: 短期均线搭配60日线向上
             if self._check_ma_trend(code):
                 reasons.append("均线向上")
             
-            # 规则7: 分时图比大盘强
+            # 规则8: 分时图比大盘强
             if self._check_strength_vs_market(code):
                 reasons.append("强于大盘")
             
@@ -236,7 +234,7 @@ class StockSelector:
                     reason=",".join(reasons)
                 ))
         
-        logger.info(f"规则5-7筛选后: 最终选出 {len(selected)} 只股票")
+        logger.info(f"规则6-8筛选后: 最终选出 {len(selected)} 只股票")
         return selected[:50]  # 最多返回50只
 
     def _check_volume_increasing(self, stock_code: str) -> bool:
